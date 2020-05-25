@@ -9,7 +9,7 @@ from discord.ext.commands import Bot, CommandNotFound, MissingRole, has_role
 from decorators import save_state
 from globals import GlobalState
 from settings import ADMIN_ROLE_ID, AUTHORIZED_CHANNELS, DISCORD_TOKEN, PREFIX
-from utils import update_channel
+from utils import get_user_dm, update_channel
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,7 @@ async def on_ready():
             for layer_number, layer in zone.layers.items():
                 channel = layer.channel
                 # Wipe channel
-                async for message in channel.history(limit=None):
-                    await message.delete()
+                await channel.purge(limit=None)
                 layer.status_message = await channel.send("I'm bootin' baby!")
                 layer.table_message = await channel.send("I'm bootin' baby!")
     else:
@@ -85,7 +84,7 @@ async def on_ready():
 
     for zone_name, zone in GlobalState().state.items():
         for layer_number, layer in zone.layers.items():
-            await update_channel(zone_name, layer_number)
+            await update_channel(layer.channel)
     global_state.initialized = True
     global_state.save_current_state()
 
@@ -135,23 +134,82 @@ async def on_command_error(context, exception):
             exc_info=(type(exception), exception, exception.__traceback__)
         )
 
-# print(123)
-# a = GlobalState()
-# a.fresh_init()
-# a.save_current_state()
-# print(a.state.toDict())
-# a.load_current_saved_state()
-# print(type(a.state))
-# print(a.state)
-# for zone_name, zone in a.state.items():
-#     print(zone_name)
-#     channel_prefix = zone.channel_name
-#     for layer_number, layer in zone.layers.items():
-#         print("Layer", layer_number)
-#         channel = layer.channel
-#         table_message = layer.table_message
-#         for spot_number, spot in layer.spots.items():
-#             print("Spot", spot_number)
+
+@bot.command()
+@save_state
+async def signin(ctx, *spot_nums):
+    # Remove duplicates
+    spot_nums = list(set(spot_nums))
+
+    user = ctx.message.author
+    channel = ctx.message.channel
+    user_dm = await get_user_dm(user)
+    zone_name, layer_num, state = GlobalState().get_state_for_channel(channel)
+
+    if len(spot_nums) == 0:
+        await user_dm.send(
+            (
+                f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                "You need to give me atleast one lotus spot number\n"
+                f"You can choose from the following: {[spot.number for spot in state.spots.values() if spot.player is None]}"
+            )
+        )
+        await ctx.message.delete()
+        return
+
+    for spot_num in spot_nums:
+        try:
+            int(spot_num)
+        except ValueError:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "Pretty sure at least one of those aint a valid number\n"
+                    f"You can choose from the following: {[spot.number for spot in state.spots.values() if spot.player is None]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+        if spot_num not in state.spots:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "Pretty sure atleast one of those aint a valid spot number\n"
+                    f"You can choose from the following: {[spot.number for spot in state.spots.values() if spot.player is None]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+        spot = state.spots[spot_num]
+        if spot.player is not None:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "At least one of those spots is already taken\n"
+                    f"You can choose from the following: {[spot.number for spot in state.spots.values() if spot.player is None]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+    for spot_num in spot_nums:
+        spot = state.spots[spot_num]
+        spot.player = user
+
+    lotus_spots = "\n".join([state.spots[spot_num].disc_message_fmt() for spot_num in spot_nums])
+    await user_dm.send(
+        (
+            "Sign in confirmed.\n"
+            f"Zone: {zone_name} | Layer: {layer_num}\n"
+            f"{lotus_spots}"
+        )
+    )
+    await ctx.message.delete()
+    return ctx.channel
+
+
 
 if __name__ == "__main__":
     logging.basicConfig(

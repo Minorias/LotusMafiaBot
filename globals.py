@@ -7,7 +7,7 @@ from os import path
 import discord
 from dotmap import DotMap
 
-from settings import NUM_OF_LAYERS, SAVE_FILENAME, ZONES, NUMBER_EMOJI_MAPPING
+from settings import NUM_OF_LAYERS, NUMBER_EMOJI_MAPPING, SAVE_FILENAME, ZONES
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +29,14 @@ class LotusSpot:
         }
         return LotusSpot(**data)
 
-    def as_discord_str(self):
+    def disc_table_fmt(self):
         return (
             f"{NUMBER_EMOJI_MAPPING[self.number]} | "
             f"**__{self.name}__** - {self.player.mention if self.player else 'FREE'}"
         )
 
-
-class LotusState(DotMap):
-    """
-    Helper class
-    Acts as a dotmap while also providing some qol functions
-    """
-
-    def get_channel_state(self, channel_name):
-        for zone_name, zone in self.items():
-            for layer_number, layer in zone.layers.items():
-                if channel_name == layer.channel_name:
-                    return layer
-        raise ValueError(f"|{channel_name}| channel state not found")
+    def disc_message_fmt(self):
+        return f"{NUMBER_EMOJI_MAPPING[self.number]} - **__{self.name}__**"
 
 
 class SingletonMetaclass(type):
@@ -131,13 +120,14 @@ class GlobalState(metaclass=SingletonMetaclass):
                 for spot in ZONE_INFO["spots"]:
                     spot_number = spot["number"]
                     spot_name = spot["name"]
+                    print(type(spot_number))
                     state[ZONE].layers[layer].spots[spot_number] = LotusSpot(
                         name=spot_name,
                         number=spot_number,
                         player=None
                     )
-        self.state = LotusState(state, _dynamic=False)
-        self.state._map = state
+        new_state = DotMap(state, _dynamic=False)
+        self.state = new_state
 
     def _load_state(self, global_state):
         state = DotMap(global_state["state"], _dynamic=False)
@@ -146,9 +136,7 @@ class GlobalState(metaclass=SingletonMetaclass):
                 for spot in state[zone].layers[layer].spots:
                     state[zone].layers[layer].spots[spot] = LotusSpot(**state[zone].layers[layer].spots[spot])
 
-        new_state = LotusState(state, _dynamic=False)
-        new_state._map = state
-        return new_state
+        return state
 
     def load_current_saved_state(self):
         try:
@@ -162,6 +150,29 @@ class GlobalState(metaclass=SingletonMetaclass):
     def save_current_state(self):
         with open(ABSOLUTE_CURRENT_SAVE_FP, "w") as f:
             json_dump(self, f)
+
+    def get_state_for_channel(self, channel):
+        """
+        returns the appropriate layer dict
+        {
+            'channel': None,
+            'table_message': None,
+            'status_message': None,
+            'timer': None,
+            'spots': {
+                1: <__main__.LotusSpot at 0x7f165999c190>,
+                2: <__main__.LotusSpot at 0x7f165999c1c0>,
+        }
+        """
+        if isinstance(channel, discord.TextChannel):
+            channel_name = channel.name
+        else:
+            channel_name = channel
+        for zone_name, zone in self.state.items():
+            for layer_number, layer_state in zone.layers.items():
+                if channel_name == layer_state.channel_name:
+                    return zone_name, layer_number, layer_state
+        raise ValueError(f"|{channel_name}| channel state not found")
 
 
 """

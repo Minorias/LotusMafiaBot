@@ -8,13 +8,13 @@ BLANK = b'\xe2\x80\x8e'.decode()
 DATE_FMT = "%d/%m/%Y at %H:%M"
 
 
-async def update_channel(zone_name, layer_num):
-    await _update_status_message(zone_name, layer_num)
-    await _update_table_message(zone_name, layer_num)
+async def update_channel(channel):
+    await _update_status_message(channel)
+    await _update_table_message(channel)
 
 
-async def _update_status_message(zone_name, layer_num):
-    state = GlobalState().state[zone_name].layers[layer_num]
+async def _update_status_message(channel):
+    zone_name, layer_num, state = GlobalState().get_state_for_channel(channel)
 
     status_embed = discord.Embed(
         title=f"{zone_name} | Layer {layer_num}",
@@ -99,16 +99,22 @@ async def _update_status_message(zone_name, layer_num):
     await state.status_message.edit(embed=status_embed, content="")
 
 
-async def _update_table_message(zone_name, layer_num):
-    state = GlobalState().state[zone_name].layers[layer_num]
+async def _update_table_message(channel):
+    zone_name, layer_num, state = GlobalState().get_state_for_channel(channel)
 
     table_embed = discord.Embed(
-        title=f"Lotus Spots",
+        title="Lotus Spots",
     )
     for spot in state.spots.values():
         table_embed.add_field(
             name=BLANK,
-            value=spot.as_discord_str(),
+            value=spot.disc_table_fmt(),
             inline=False
         )
     await state.table_message.edit(embed=table_embed, content="")
+
+
+async def get_user_dm(user):
+    if user.dm_channel is None:
+        await user.create_dm()
+    return user.dm_channel
