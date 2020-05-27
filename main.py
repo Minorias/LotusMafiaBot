@@ -6,9 +6,9 @@ from datetime import datetime
 import discord
 from discord.ext.commands import Bot, CommandNotFound, MissingRole, has_role
 
-from decorators import save_state
+from decorators import save_state, enforce_channels
 from globals import GlobalState
-from settings import ADMIN_ROLE_ID, AUTHORIZED_CHANNELS, DISCORD_TOKEN, PREFIX
+from settings import ADMIN_ROLE_ID, AUTHORIZED_CHANNELS, DISCORD_TOKEN, PREFIX, ZONE_CHANNELS, LOTUS_TIMER_CHANNEL, ADMIN_CHANNEL
 from utils import get_user_dm, update_channel
 
 logger = logging.getLogger(__name__)
@@ -108,26 +108,39 @@ async def on_message(message):
     if message.author.id == bot.user.id:
         return
 
+    if message.channel.type == discord.ChannelType.private:
+        return
+
+    if message.channel.name not in AUTHORIZED_CHANNELS:
+        return
+
     state = GlobalState()
     while not state.initialized:
         await asyncio.sleep(1)
-
-    channel = message.channel
-    # We only care for our 3 channels, rest can be ignored
-    if channel.name in AUTHORIZED_CHANNELS:
-        await bot.process_commands(message)
-    else:
-        logger.warning(f"Got message from unallowed channel {message}")
+    await bot.process_commands(message)
 
 
 @bot.event
 async def on_command_error(context, exception):
     if isinstance(exception, CommandNotFound):
         logger.warning(f"Unrecognized command: |{context.message.content}|")
-        await context.channel.send("I do not recognize that command. Learn to type. Or read. Or both.")
+        user_dm = await get_user_dm(context.message.author)
+        await user_dm.send(
+            (
+                f"You sent `{context.message.content}` in {context.channel.mention}\n"
+                "I do not recognize that command. Learn to type. Or read. Or both."
+            )
+        )
+        await context.message.delete()
     elif isinstance(exception, MissingRole):
         logger.warning(f"Missing role for user: |{context.message.author}| for message: |{context.message.content}")
-        await context.channel.send("You do not have the permissions to use that command. Newb.")
+        user_dm = await get_user_dm(context.message.author)
+        await user_dm.send(
+            (
+                f"You sent `{context.message.content}` in {context.channel.mention}\n"
+                "You do not have the permissions to use that command."
+            )
+        )
     else:
         logger.error(
             f"Exception in command |{context.command}|. On message |{context.message.content}|. From user |{context.message.author.display_name}|",
@@ -137,6 +150,7 @@ async def on_command_error(context, exception):
 
 @bot.command()
 @save_state
+@enforce_channels(*ZONE_CHANNELS)
 async def signin(ctx, *spot_nums):
     # Remove duplicates
     spot_nums = list(set(spot_nums))
@@ -201,7 +215,7 @@ async def signin(ctx, *spot_nums):
     lotus_spots = "\n".join([state.spots[spot_num].disc_message_fmt() for spot_num in spot_nums])
     await user_dm.send(
         (
-            "Sign in confirmed.\n"
+            "Sign in confirmed!\n"
             f"Zone: {zone_name} | Layer: {layer_num}\n"
             f"{lotus_spots}"
         )
@@ -209,6 +223,120 @@ async def signin(ctx, *spot_nums):
     await ctx.message.delete()
     return ctx.channel
 
+
+@bot.command()
+@save_state
+@enforce_channels(*ZONE_CHANNELS)
+async def signout(ctx, *spot_nums):
+    # Remove duplicates
+    spot_nums = list(set(spot_nums))
+
+    user = ctx.message.author
+    channel = ctx.message.channel
+    user_dm = await get_user_dm(user)
+    zone_name, layer_num, state = GlobalState().get_state_for_channel(channel)
+
+    signedin_spots = [spot for spot in state.spots.values() if spot.player == user]
+    if not signedin_spots:
+        await user_dm.send(
+            (
+                f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                "You can't sign out of spots if you're not signed into any in the first place"
+            )
+        )
+        await ctx.message.delete()
+        return
+
+    if len(spot_nums) == 0:
+        # signout from all the spots
+        for spot in signedin_spots:
+            spot.player = None
+        lotus_spots = "\n".join([spot.disc_message_fmt() for spot in signedin_spots])
+        await user_dm.send(
+            (
+                "Sign out confirmed!\n"
+                f"Zone: {zone_name} | Layer: {layer_num}\n"
+                f"{lotus_spots}"
+            )
+        )
+        await ctx.message.delete()
+        return channel
+
+    for spot_num in spot_nums:
+        try:
+            int(spot_num)
+        except ValueError:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "Pretty sure at least one of those aint a valid number\n"
+                    f"You can choose from the following: {[spot.number for spot in signedin_spots]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+        if spot_num not in state.spots:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "Pretty sure atleast one of those aint a valid spot number\n"
+                    f"You can choose from the following: {[spot.number for spot in signedin_spots]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+        spot = state.spots[spot_num]
+        if spot.player != user:
+            await user_dm.send(
+                (
+                    f"You sent `{ctx.message.content}` in {channel.mention}\n"
+                    "At least one of those spots is taken by someone else or you aint signed into it\n"
+                    f"You can choose from the following: {[spot.number for spot in signedin_spots]}"
+                )
+            )
+            await ctx.message.delete()
+            return
+
+    for spot_num in spot_nums:
+        spot = state.spots[spot_num]
+        spot.player = None
+
+    lotus_spots = "\n".join([state.spots[spot_num].disc_message_fmt() for spot_num in spot_nums])
+    await user_dm.send(
+        (
+            "Sign out confirmed!\n"
+            f"Zone: {zone_name} | Layer: {layer_num}\n"
+            f"{lotus_spots}"
+        )
+    )
+    await ctx.message.delete()
+    return ctx.channel
+
+
+@bot.command()
+@has_role(ADMIN_ROLE_ID)
+@save_state
+@enforce_channels(*ZONE_CHANNELS)
+async def clear(ctx):
+    user = ctx.message.author
+    channel = ctx.message.channel
+    zone_name, layer_num, state = GlobalState().get_state_for_channel(channel)
+
+    cleared_users = set()
+    for spot in state.spots.values():
+        if spot.player is not None:
+            cleared_users.add(spot.player)
+            spot.player = None
+
+    for user in cleared_users:
+        user_dm = await get_user_dm(user)
+        await user_dm.send(f"You were cleared from {channel.mention}. Sign up again if you're still there!")
+
+    await channel.send("Signups where just cleared! Everyone get in @here!")
+    await ctx.message.delete()
+    return channel
 
 
 if __name__ == "__main__":

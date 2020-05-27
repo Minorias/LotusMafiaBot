@@ -59,11 +59,12 @@ ZONES = {
     },
 }
 
-LOTUS_TIMER_CHANNEL_NAME = "lotus-timer-callouts"
-
-AUTHORIZED_CHANNELS = [
+LOTUS_TIMER_CHANNEL = "lotus-timer-callouts"
+ADMIN_CHANNEL = "bot-admin"
+ZONE_CHANNELS = [
     zone["channel_format"].format(layer) for zone in ZONES.values() for layer in range(1, NUM_OF_LAYERS+1)
-] + [LOTUS_TIMER_CHANNEL_NAME]
+]
+AUTHORIZED_CHANNELS = ZONE_CHANNELS + [LOTUS_TIMER_CHANNEL] + [ADMIN_CHANNEL]
 
 SAVE_FILENAME = "lotus_yoink.exe"
 
@@ -77,8 +78,7 @@ NUMBER_EMOJI_MAPPING = {
     7: ":seven:",
     8: ":eight:",
     9: ":nine:",
-    10: ":keycap_ten:",
-
+    10: ":keycap_ten:"
 }
 
 LOTUS_WINDOW_START_DELTA = timedelta(minutes=45)
